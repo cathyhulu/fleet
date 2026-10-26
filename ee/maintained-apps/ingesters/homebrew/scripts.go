@@ -466,6 +466,15 @@ func processUninstallArtifact(u *brewUninstall, sb *scriptBuilder, bundleID stri
 	})
 
 	process(u.Delete, func(path string) {
+		if strings.HasPrefix(path, "~") {
+			if !isHomeSubpath(path) {
+				return
+			}
+			addUserVar()
+			sb.AddFunction("delete_user_path", deleteUserPathFunc)
+			sb.Writef(`delete_user_path "$LOGGED_IN_USER" %s`, shellSingleQuote(path))
+			return
+		}
 		sb.RemoveFile(shellSingleQuote(path))
 	})
 
@@ -478,6 +487,17 @@ func processUninstallArtifact(u *brewUninstall, sb *scriptBuilder, bundleID stri
 		sb.AddFunction("trash", trashFunc)
 		sb.Writef(`trash "$LOGGED_IN_USER" %s`, shellSingleQuote(path))
 	})
+}
+
+// isHomeSubpath reports whether p is a path under "~/" that's safe to delete
+// once "~" is resolved. Like brew, it rejects the home folder itself and paths
+// with "." or ".." segments, which could resolve outside the home folder.
+func isHomeSubpath(p string) bool {
+	segments := strings.Split(p, "/")
+	if segments[0] != "~" || slices.Contains(segments, ".") || slices.Contains(segments, "..") {
+		return false
+	}
+	return slices.ContainsFunc(segments[1:], func(s string) bool { return s != "" })
 }
 
 // caskQuitID returns the ID to quit for a cask uninstall quit entry. Some casks
@@ -1077,6 +1097,18 @@ const trashFunc = `trash() {
   else
     echo "$target_file doesn't exist."
   fi
+}`
+
+// deleteUserPathFunc deletes a cask "delete" path under the console user's
+// home. A quoted "~" never expands, so it's resolved the same way trash does
+// it, and the path is skipped when there's no GUI user.
+const deleteUserPathFunc = `delete_user_path() {
+  local logged_in_user="$1"
+  local target="$2"
+
+  [[ -n "$logged_in_user" && "$logged_in_user" != "root" && "$logged_in_user" != "loginwindow" ]] || return 0
+  [[ "$target" == "~/"?* ]] || return 0
+  sudo rm -rf "/Users/$logged_in_user${target:1}"
 }`
 
 const sendSignalFunc = `send_signal() {
